@@ -114,6 +114,17 @@ ul.rules,ol.rules{margin:0;padding-left:20px;display:flex;flex-direction:column;
 svg{flex:none}
 @media (max-width:380px){.pts{font-size:32px}.grid2{grid-template-columns:1fr}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+.top{flex-direction:row;align-items:center;gap:12px}
+.top .tt{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.profbtn{border:0;background:transparent;padding:0;cursor:pointer;position:relative;flex:none;border-radius:50%;line-height:0}
+.profbtn::after{content:'\21C4';position:absolute;right:-4px;bottom:-4px;width:20px;height:20px;border-radius:50%;background:var(--accent);color:var(--accent-ink);font-size:12px;line-height:20px;text-align:center;border:2px solid var(--bg)}
+.profbtn:focus-visible,.chrow:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+img.av{object-fit:cover;background:var(--surface2)}
+.sheet-bg{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:flex;align-items:flex-end;justify-content:center}
+.sheet{background:var(--surface);color:var(--ink);width:100%;max-width:560px;max-height:90vh;overflow:auto;border-radius:18px 18px 0 0;display:flex;flex-direction:column;gap:12px;padding:16px max(16px,env(safe-area-inset-left,0px)) calc(16px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-right,0px))}
+.chrow{display:flex;align-items:center;gap:12px;width:100%;padding:12px;border-radius:12px;border:1.5px solid var(--line);background:var(--bg);color:var(--ink);font:inherit;text-align:left;cursor:pointer;min-height:56px}
+.chrow[aria-current="true"]{border-color:var(--accent)}
+.chemo{font-size:24px;line-height:1;flex:none}
 </style>
 </head>
 <body>
@@ -125,6 +136,15 @@ svg{flex:none}
 var COLORS=['#B3245F','#2A6FDB','#17895F','#D9822B','#7A4FD6','#0F8F9E'];
 var TYPES=['Academia','Em casa','Corrida','Outro'];
 var DEF={start:'2026-11-16',months:2,stake:50,penalty:10,startPoints:100,requireMeal:true};
+var TYPEDEF={
+  fit:{label:'Academia e alimentação',emo:'🏋️',money:true,k:['w','m'],names:['Treino','Refeição saudável'],miss:['foto do treino','foto da refeição'],hints:['Academia, casa ou onde for',''],
+    hello:'Vamos treinar?',legendOk:'Treino registrado',partTxt:'Só uma foto',notePh:'Ex.: treino de perna, 45 min',def:DEF,
+    about:'Foto do treino e de uma refeição saudável por dia. Quem perder paga a aposta.'},
+  refeicoes:{label:'Almoço e jantar',emo:'🍽️',money:false,k:['a','j'],names:['Almoço','Jantar'],miss:['foto do almoço','foto do jantar'],hints:['Foto do prato','Foto do prato'],
+    hello:'Bora comer bem?',legendOk:'Almoço e jantar enviados',partTxt:'Só uma refeição',notePh:'Ex.: salada com frango grelhado',
+    def:{start:'',months:1,stake:0,penalty:10,startPoints:100,requireMeal:true},
+    about:'Foto do almoço e do jantar todo dia. É só por diversão, sem dinheiro.'}
+};
 var WD=['dom','seg','ter','qua','qui','sex','sáb'];
 var RULES_TXT="rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /{document=**} {\n      allow read, write: if true;\n    }\n  }\n}";
 var ICON={
@@ -135,7 +155,8 @@ var ICON={
 };
 var FBCFG=null;
 var S={db:null,uid:null,players:{},metas:{},cfg:null,tab:'placar',galDate:null,loaded:{players:false,cfg:false},
-  err:null,busy:{},toast:'',confirmNew:false,newColor:COLORS[0],pColor:null,setupErr:''};
+  err:null,busy:{},toast:'',confirmNew:false,newColor:COLORS[0],pColor:null,setupErr:'',sheet:false,sheetView:'main',confirmLeave:false,newName:'',newType:'refeicoes',joinText:''};
+var CH=null,LIST=[],unsubs=[];
 var photoCache=new Map(),subs={},pending=false,toastT=null,metaQueue=Promise.resolve(),lastDay='';
 
 function h(t,a){
@@ -166,18 +187,20 @@ function addDays(k,n){var d=toD(k);d.setUTCDate(d.getUTCDate()+n);return fromD(d
 function diff(a,b){return Math.round((toD(b)-toD(a))/864e5)}
 function fmt(k){var p=k.split('-');return p[2]+'/'+p[1]}
 function wd(k){return WD[toD(k).getUTCDay()]}
-function cfg(){var c=Object.assign({},DEF,S.cfg||{});['months','stake','penalty','startPoints'].forEach(function(f){c[f]=Number(c[f])});return c}
+function TY(){return TYPEDEF[(S.cfg&&S.cfg.type)||(entry(CH)||{}).type]||TYPEDEF.fit}
+function P(p){return CH?'desafios/'+CH+'/'+p:p}
+function cfg(){var c=Object.assign({},TY().def,S.cfg||{});['months','stake','penalty','startPoints'].forEach(function(f){c[f]=Number(c[f])});return c}
 function cycleEnd(c){var d=toD(c.start);d.setUTCMonth(d.getUTCMonth()+c.months);d.setUTCDate(d.getUTCDate()-1);return fromD(d)}
 function money(n){return 'R$ '+n.toLocaleString('pt-BR')}
 
 /* scoring */
-function valid(m,c){return !!(m&&m.w&&(!c.requireMeal||m.m))}
+function valid(m,c){var k=TY().k;return !!(m&&m[k[0]]&&(!c.requireMeal||m[k[1]]))}
 /* penalidade do dia: 0 com as duas fotos, metade com só uma, cheia sem nenhuma */
 function dayPenalty(m,c){
-  var w=!!(m&&m.w),me=!!(m&&m.m);
-  if(!c.requireMeal)return w?0:c.penalty;
-  if(w&&me)return 0;
-  if(w||me)return c.penalty/2;
+  var k=TY().k,a=!!(m&&m[k[0]]),b=!!(m&&m[k[1]]);
+  if(!c.requireMeal)return a?0:c.penalty;
+  if(a&&b)return 0;
+  if(a||b)return c.penalty/2;
   return c.penalty;
 }
 function num(n){return Number(n).toLocaleString('pt-BR',{maximumFractionDigits:1})}
@@ -198,7 +221,9 @@ function stats(uid){
 function phase(c,t,end){return t<c.start?'before':(t>end?'after':'running')}
 function color(p){return COLORS.indexOf(p&&p.color)>=0?p.color:COLORS[0]}
 function avatar(p,size){
-  return h('span',{class:'av',style:'background:'+color(p)+(size?';width:'+size+'px;height:'+size+'px;font-size:'+Math.round(size*.45)+'px':'')},((p&&p.name)||'?').trim().slice(0,1).toUpperCase());
+  var st=size?'width:'+size+'px;height:'+size+'px;font-size:'+Math.round(size*.45)+'px':'';
+  if(p&&p.av)return h('img',{class:'av',src:p.av,alt:'',style:st});
+  return h('span',{class:'av',style:'background:'+color(p)+(st?';'+st:'')},((p&&p.name)||'?').trim().slice(0,1).toUpperCase());
 }
 
 /* ui helpers */
@@ -209,7 +234,7 @@ function copyText(text,box){
   if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text).then(function(){toast('Copiado')}).catch(sel)}else sel();
 }
 function newId(){return 'p'+Date.now().toString(36)+Math.floor(Math.random()*1296).toString(36)}
-function setUid(id){S.uid=id;try{if(id)localStorage.setItem('df_uid',id);else localStorage.removeItem('df_uid')}catch(e){}render(true)}
+function setUid(id){S.uid=id;lsSet(CH?'df_uid_'+CH:'df_uid',id||null);render(true)}
 
 /* firebase config: pasted once, then carried in the link */
 function encodeCfg(o){return btoa(unescape(encodeURIComponent(JSON.stringify(o)))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
@@ -246,7 +271,7 @@ function compress(file){
 function loadPhoto(uid,d,kind){
   var k=uid+'/'+d+'/'+kind,c=photoCache.get(k);
   if(c)return Promise.resolve(c);
-  return S.db.doc('checkins/'+uid+'/photos/'+d+'_'+kind).get().then(function(s){
+  return S.db.doc(P('checkins/'+uid+'/photos/'+d+'_'+kind)).get().then(function(s){
     var x=s.exists?s.data():null,v=x&&x.d?{d:x.d,ts:x.ts||0}:null;if(v)photoCache.set(k,v);return v;
   }).catch(function(){return null});
 }
@@ -271,7 +296,7 @@ function saveMeta(patch){
   var uid=S.uid,d=today(),cur=(S.metas[uid]||{})[d]||{};
   var next=Object.assign({date:d,w:false,m:false,type:'',note:''},cur,patch,{ts:Date.now()});
   var m={};m[d]=next;S.metas[uid]=Object.assign({},S.metas[uid]||{},m);
-  var ref=S.db.doc('checkins/'+uid+'/days/'+d);
+  var ref=S.db.doc(P('checkins/'+uid+'/days/'+d));
   metaQueue=metaQueue.then(function(){return ref.set(next)}).catch(function(){toast('Não foi possível salvar. Tente de novo.')});
   return metaQueue;
 }
@@ -279,9 +304,9 @@ function uploadPhoto(kind,file){
   var uid=S.uid,d=today();
   S.busy[kind]=true;render(true);
   compress(file).then(function(url){
-    return S.db.doc('checkins/'+uid+'/photos/'+d+'_'+kind).set({d:url,ts:Date.now()}).then(function(){
+    return S.db.doc(P('checkins/'+uid+'/photos/'+d+'_'+kind)).set({d:url,ts:Date.now()}).then(function(){
       photoCache.set(uid+'/'+d+'/'+kind,{d:url,ts:Date.now()});
-      return saveMeta(kind==='w'?{w:true}:{m:true});
+      var pt={};pt[kind]=true;return saveMeta(pt);
     });
   }).then(function(){toast('Foto salva')}).catch(function(){toast('Não consegui enviar a foto. Tente outra.')}).then(function(){S.busy[kind]=false;render(true)});
 }
@@ -327,7 +352,7 @@ function whoCard(){
     })));
 }
 function joinCard(){
-  var inp=h('input',{type:'text',id:'join-name',maxlength:'24',placeholder:'Seu nome'});
+  var pr=prof(),inp=h('input',{type:'text',id:'join-name',maxlength:'24',placeholder:'Seu nome',value:pr.name||''});
   var sw=h('div',{class:'swatches'});
   function paint(){
     sw.replaceChildren.apply(sw,COLORS.map(function(c){
@@ -336,15 +361,16 @@ function joinCard(){
   }
   paint();
   return h('section',{class:'card'},
-    h('h2',null,Object.keys(S.players).length?'Sou nova no desafio':'Entrar no desafio'),
+    h('h2',null,Object.keys(S.players).length?'Entrar como novo participante':'Entrar no desafio'),
     h('p',{class:'muted'},'Escolha seu nome e sua cor. Você começa com '+cfg().startPoints+' pontos.'),
     h('label',{class:'fld',for:'join-name'},'Nome',inp),
     h('div',{class:'fld'},'Cor',sw),
     h('button',{class:'btn',type:'button',onclick:function(){
       var name=inp.value.trim();if(!name){inp.focus();return}
-      var id=newId();
-      S.db.doc('players/'+id).set({name:name.slice(0,24),color:S.newColor,joined:today(),ts:Date.now()})
-        .then(function(){setUid(id);toast('Bem-vinda ao desafio!')}).catch(function(){toast('Não foi possível entrar. Confira a internet.')});
+      var id=newId(),doc={name:name.slice(0,24),color:S.newColor,joined:today(),ts:Date.now()};
+      if(pr.av)doc.av=pr.av;
+      S.db.doc(P('players/'+id)).set(doc)
+        .then(function(){setProf({name:doc.name,color:doc.color});setUid(id);toast('Você entrou no desafio!')}).catch(function(){toast('Não foi possível entrar. Confira a internet.')});
     }},'Entrar'));
 }
 function identity(){
@@ -355,10 +381,11 @@ function identity(){
 }
 function prizeCard(rows,c,ph){
   var n=rows.length,top=rows[0].s.points,leaders=rows.filter(function(r){return r.s.points===top});
-  var names=leaders.map(function(r){return r.p.name}).join(' e ');
+  var names=leaders.map(function(r){return r.p.name}).join(' e '),isMoney=TY().money;
   var msg,lead=ph==='after'?'Resultado final':'Se acabasse hoje';
-  if(n<2)msg='Chame as amigas para entrar. A disputa começa quando houver pelo menos duas.';
-  else if(leaders.length===n)msg='Todas empatadas com '+top+' pontos. Ninguém paga nada se terminar assim.';
+  if(n<2)msg='Chame o pessoal para entrar. A disputa começa quando houver pelo menos duas pessoas.';
+  else if(leaders.length===n)msg='Empate geral com '+top+' pontos.'+(isMoney?' Ninguém paga nada se terminar assim.':'');
+  else if(!isMoney)msg=leaders.length===1?names+(ph==='after'?' venceu e leva a fama.':' está na frente. Vale só a fama, sem dinheiro.'):'Empate na frente entre '+names+'.';
   else if(leaders.length===1)msg=names+' ficaria com o prêmio. Cada perdedora paga '+money(c.stake)+', então '+names+' recebe '+money(c.stake*(n-1))+'.';
   else msg='Empate na frente entre '+names+'. Quem ficar atrás paga '+money(c.stake)+' a cada líder.';
   return h('section',{class:'card prize'},h('div',{class:'eyebrow'},lead),h('p',null,msg));
@@ -407,8 +434,8 @@ function viewPlacar(){
       }))));
   });
   grid.appendChild(h('div',{class:'legend'},
-    h('span',null,h('i',{class:'ok'}),'Treino registrado'),
-    c.requireMeal?h('span',null,h('i',{class:'part'}),'Só uma foto (−'+num(c.penalty/2)+')'):null,
+    h('span',null,h('i',{class:'ok'}),TY().legendOk),
+    c.requireMeal?h('span',null,h('i',{class:'part'}),TY().partTxt+' (−'+num(c.penalty/2)+')'):null,
     h('span',null,h('i',{class:'miss'}),'Falta (−'+num(c.penalty)+')'),
     h('span',null,h('i',{class:'today'}),'Hoje'),
     h('span',null,h('i'),'A vir')));
@@ -427,29 +454,29 @@ function slot(kind,label,hint,meta,enabled){
     input);
 }
 function viewHoje(){
-  var c=cfg(),t=today(),end=cycleEnd(c),ph=phase(c,t,end),out=[];
+  var c=cfg(),T=TY(),k1=T.k[0],k2=T.k[1],t=today(),end=cycleEnd(c),ph=phase(c,t,end),out=[];
   if(S.err)return [h('section',{class:'card'},h('h2',null,'Sem acesso ao banco'),h('p',{class:'muted'},'Confira as regras do Firestore e a internet.'))];
   if(!S.loaded.players)return [h('p',{class:'muted'},'Carregando...')];
   if(!S.players[S.uid])return identity();
   var meta=(S.metas[S.uid]||{})[t]||{},ok=valid(meta,c),running=ph==='running';
-  var missing=[];if(!meta.w)missing.push('foto do treino');if(c.requireMeal&&!meta.m)missing.push('foto da refeição');
+  var missing=[];if(!meta[k1])missing.push(T.miss[0]);if(c.requireMeal&&!meta[k2])missing.push(T.miss[1]);
   out.push(h('div',{class:'eyebrow'},wd(t)+', '+fmt(t)));
   if(!running)out.push(h('div',{class:'banner warn'},ph==='before'?'O ciclo começa em '+fmt(c.start)+'.':'O ciclo terminou. Comecem um novo na aba Regras.'));
   else out.push(ok?h('div',{class:'banner ok'},'Dia validado. Sem penalidade hoje.'):h('div',{class:'banner warn'},'Falta enviar: '+missing.join(' e ')+'. Se não enviar até o fim do dia, perde '+num(dayPenalty(meta,c))+' pontos.'));
   out.push(h('section',{class:'card'},
     h('div',{class:'grid2'},
-      slot('w','Treino','Academia, casa ou onde for',meta,running),
-      slot('m','Refeição saudável',c.requireMeal?'Obrigatória':'Opcional',meta,running)),
-    h('div',{class:'fld'},'Onde foi o treino?',
+      slot(k1,T.names[0],T.hints[0],meta,running),
+      slot(k2,T.names[1],T.money?(c.requireMeal?'Obrigatória':'Opcional'):T.hints[1],meta,running)),
+    T.money?h('div',{class:'fld'},'Onde foi o treino?',
       h('div',{class:'chips'},TYPES.map(function(ty){
         return h('button',{class:'chip',type:'button','aria-pressed':String(meta.type===ty),disabled:!running,onclick:function(){saveMeta({type:meta.type===ty?'':ty});render(true)}},ty);
-      }))),
+      }))):null,
     h('label',{class:'fld',for:'note'},'Observação (opcional)',
-      h('textarea',{id:'note',maxlength:'200',placeholder:'Ex.: treino de perna, 45 min',value:meta.note||'',disabled:!running,onchange:function(e){saveMeta({note:e.target.value.trim()})}}))));
+      h('textarea',{id:'note',maxlength:'200',placeholder:T.notePh,value:meta.note||'',disabled:!running,onchange:function(e){saveMeta({note:e.target.value.trim()})}}))));
   return out;
 }
 function viewGaleria(){
-  var c=cfg(),t=today(),end=cycleEnd(c);
+  var c=cfg(),T=TY(),k1=T.k[0],k2=T.k[1],t=today(),end=cycleEnd(c);
   if(S.err)return [h('section',{class:'card'},h('h2',null,'Sem acesso ao banco'),h('p',{class:'muted'},'Confira as regras do Firestore e a internet.'))];
   if(!S.loaded.players)return [h('p',{class:'muted'},'Carregando...')];
   if(t<c.start)return [h('section',{class:'card'},h('h2',null,'Sem fotos ainda'),h('p',{class:'muted'},'O ciclo começa em '+fmt(c.start)+'.'))];
@@ -464,27 +491,31 @@ function viewGaleria(){
   if(!ids.length)out.push(h('p',{class:'muted'},'Ninguém entrou ainda.'));
   ids.forEach(function(id){
     var p=S.players[id],m=(S.metas[id]||{})[d],ok=valid(m,c),pn=dayPenalty(m,c),
-        chip=ok?h('span',{class:'chip ok'},'Validado'):(d<t?h('span',{class:'chip '+(pn<c.penalty?'warn':'miss')},(pn<c.penalty?'Só uma foto':'Falta')+' (−'+num(pn)+')'):h('span',{class:'chip warn'},'Pendente'));
+        chip=ok?h('span',{class:'chip ok'},'Validado'):(d<t?h('span',{class:'chip '+(pn<c.penalty?'warn':'miss')},(pn<c.penalty?T.partTxt:'Falta')+' (−'+num(pn)+')'):h('span',{class:'chip warn'},'Pendente'));
     out.push(h('section',{class:'card'},
       h('div',{class:'row between'},h('div',{class:'row'},avatar(p,32),h('b',{class:'name'},p.name||'Sem nome')),chip),
-      m&&(m.w||m.m)?h('div',{class:'photos'},
-        m.w?photoImg(id,d,'w','Treino de '+(p.name||'')):h('div',{class:'ph empty'},icon('camera'),h('span',null,'Sem foto do treino')),
-        m.m?photoImg(id,d,'m','Refeição de '+(p.name||'')):h('div',{class:'ph empty'},icon('camera'),h('span',null,'Sem foto da refeição'))):
+      m&&(m[k1]||m[k2])?h('div',{class:'photos'},
+        m[k1]?photoImg(id,d,k1,T.names[0]+' de '+(p.name||'')):h('div',{class:'ph empty'},icon('camera'),h('span',null,'Sem '+T.miss[0])),
+        m[k2]?photoImg(id,d,k2,T.names[1]+' de '+(p.name||'')):h('div',{class:'ph empty'},icon('camera'),h('span',null,'Sem '+T.miss[1]))):
         h('p',{class:'muted small'},'Sem fotos neste dia.'),
       m&&(m.type||m.note)?h('p',{class:'small'},[m.type?h('b',null,m.type):null,m.type&&m.note?' · ':null,m.note||null]):null));
   });
   return out;
 }
 function viewRegras(){
-  var c=cfg(),end=cycleEnd(c),out=[];
-  out.push(h('section',{class:'card'},h('h2',null,'Como funciona'),
-    h('ul',{class:'rules'},
-      h('li',null,'Todas começam com '+c.startPoints+' pontos.'),
-      h('li',null,'Todo dia vale enviar a foto do treino'+(c.requireMeal?' e a foto de uma refeição saudável.':'. A foto da refeição é opcional.')),
-      c.requireMeal?h('li',null,'Dia sem nenhuma foto custa '+num(c.penalty)+' pontos. Se enviar só uma das duas (treino ou refeição), custa a metade: '+num(c.penalty/2)+' pontos. Descontado quando o dia termina.'):h('li',null,'Dia sem foto do treino custa '+num(c.penalty)+' pontos, descontados quando o dia termina.'),
-      h('li',null,'O registro só pode ser feito no próprio dia.'),
-      h('li',null,'O ciclo dura '+c.months+' meses: de '+fmt(c.start)+' a '+fmt(end)+'.'),
-      h('li',null,'No fim, quem tiver mais pontos ganha. Cada perdedora paga '+money(c.stake)+' à vencedora.'))));
+  var c=cfg(),T=TY(),end=cycleEnd(c),out=[],mt=c.months+(c.months===1?' mês':' meses');
+  var rules=[h('li',null,'Cada participante começa com '+c.startPoints+' pontos.')];
+  if(T.money){
+    rules.push(h('li',null,'Todo dia vale enviar a foto do treino'+(c.requireMeal?' e a foto de uma refeição saudável.':'. A foto da refeição é opcional.')));
+    rules.push(c.requireMeal?h('li',null,'Dia sem nenhuma foto custa '+num(c.penalty)+' pontos. Se enviar só uma das duas (treino ou refeição), custa a metade: '+num(c.penalty/2)+' pontos. Descontado quando o dia termina.'):h('li',null,'Dia sem foto do treino custa '+num(c.penalty)+' pontos, descontados quando o dia termina.'));
+  }else{
+    rules.push(h('li',null,'Todo dia vale enviar a foto do almoço e a do jantar.'));
+    rules.push(h('li',null,'Dia sem nenhuma foto custa '+num(c.penalty)+' pontos. Se enviar só uma das duas, custa a metade: '+num(c.penalty/2)+' pontos. Descontado quando o dia termina.'));
+  }
+  rules.push(h('li',null,'O registro só pode ser feito no próprio dia.'));
+  rules.push(h('li',null,'O ciclo dura '+mt+': de '+fmt(c.start)+' a '+fmt(end)+'.'));
+  rules.push(T.money?h('li',null,'No fim, quem tiver mais pontos ganha. Cada perdedora paga '+money(c.stake)+' à vencedora.'):h('li',null,'É só por diversão: quem tiver mais pontos no fim leva a fama. Sem dinheiro.'));
+  out.push(h('section',{class:'card'},h('h2',null,'Como funciona'),h('ul',{class:'rules'},rules)));
   var me=S.players[S.uid];
   if(me){
     var inp=h('input',{type:'text',id:'pf-name',maxlength:'24',value:me.name||''});
@@ -499,17 +530,17 @@ function viewRegras(){
       h('div',{class:'grid2'},
         h('button',{class:'btn',type:'button',onclick:function(){
           var n=inp.value.trim();if(!n)return;
-          S.db.doc('players/'+S.uid).update({name:n.slice(0,24),color:S.pColor}).then(function(){toast('Perfil salvo')}).catch(function(){toast('Não foi possível salvar.')});
+          S.db.doc(P('players/'+S.uid)).update({name:n.slice(0,24),color:S.pColor}).then(function(){setProf({name:n.slice(0,24),color:S.pColor});toast('Perfil salvo')}).catch(function(){toast('Não foi possível salvar.')});
         }},'Salvar perfil'),
         h('button',{class:'btn ghost',type:'button',onclick:function(){setUid(null)}},'Não sou eu'))));
   }
   var f={start:h('input',{type:'date',id:'cf-start',value:c.start}),months:h('input',{type:'number',id:'cf-months',min:'1',max:'12',value:String(c.months)}),
     points:h('input',{type:'number',id:'cf-points',min:'10',max:'1000',value:String(c.startPoints)}),
     pen:h('input',{type:'number',id:'cf-pen',min:'1',max:'100',value:String(c.penalty)}),
-    stake:h('input',{type:'number',id:'cf-stake',min:'0',max:'10000',value:String(c.stake)}),
-    meal:h('input',{type:'checkbox',id:'cf-meal',checked:c.requireMeal})};
+    stake:T.money?h('input',{type:'number',id:'cf-stake',min:'0',max:'10000',value:String(c.stake)}):null,
+    meal:T.money?h('input',{type:'checkbox',id:'cf-meal',checked:c.requireMeal}):null};
   var write=function(o){
-    S.db.doc('config/main').set(o).then(function(){S.confirmNew=false;toast('Regras salvas')}).catch(function(){toast('Não foi possível salvar as regras.')});
+    S.db.doc(P('config/main')).set(Object.assign({},S.cfg||{},o)).then(function(){S.confirmNew=false;toast('Regras salvas')}).catch(function(){toast('Não foi possível salvar as regras.')});
   };
   out.push(h('section',{class:'card'},h('h3',null,'Ajustes do ciclo'),
     h('div',{class:'grid2'},
@@ -517,21 +548,183 @@ function viewRegras(){
       h('label',{class:'fld',for:'cf-months'},'Meses',f.months),
       h('label',{class:'fld',for:'cf-points'},'Pontos iniciais',f.points),
       h('label',{class:'fld',for:'cf-pen'},'Penalidade por falta',f.pen),
-      h('label',{class:'fld',for:'cf-stake'},'Valor da aposta (R$)',f.stake)),
-    h('label',{class:'row',for:'cf-meal'},f.meal,'Exigir foto da refeição'),
+      T.money?h('label',{class:'fld',for:'cf-stake'},'Valor da aposta (R$)',f.stake):null),
+    T.money?h('label',{class:'row',for:'cf-meal'},f.meal,'Exigir foto da refeição'):null,
     h('button',{class:'btn',type:'button',onclick:function(){
       if(!f.start.value)return;
-      write({start:f.start.value,months:Number(f.months.value)||2,startPoints:Number(f.points.value)||100,penalty:Number(f.pen.value)||10,stake:Number(f.stake.value)||0,requireMeal:f.meal.checked});
+      write({start:f.start.value,months:Number(f.months.value)||2,startPoints:Number(f.points.value)||100,penalty:Number(f.pen.value)||10,stake:f.stake?(Number(f.stake.value)||0):0,requireMeal:f.meal?f.meal.checked:true});
     }},'Salvar ajustes'),
     S.confirmNew?h('button',{class:'btn danger',type:'button',onclick:function(){write(Object.assign({},c,{start:today()}))}},'Confirmar: zerar pontos e começar hoje'):
     h('button',{class:'btn ghost',type:'button',onclick:function(){S.confirmNew=true;render(true)}},'Começar novo ciclo hoje')));
-  var link=location.href.split('#')[0]+'#c='+encodeCfg(FBCFG);
+  var link=location.href.split('#')[0]+'#c='+encodeCfg(FBCFG)+(CH?'&d='+CH:'');
   var box=h('input',{type:'text',id:'share-link',readonly:true,value:link});
-  out.push(h('section',{class:'card'},h('h3',null,'Link para as amigas'),
-    h('p',{class:'muted small'},'Mande este link no grupo. Quem abrir já entra conectada, sem cadastro nem e-mail. Só mande para quem vai participar.'),
+  out.push(h('section',{class:'card'},h('h3',null,'Link deste desafio'),
+    h('p',{class:'muted small'},'Mande este link só para quem vai participar deste desafio. Quem abrir já entra conectado, sem cadastro nem e-mail. Seus outros desafios continuam separados.'),
     h('label',{class:'fld',for:'share-link'},'Link',box),
+    CH?h('p',{class:'muted small'},'Código do desafio: '+CH):null,
     h('button',{class:'btn',type:'button',onclick:function(){copyText(link,box)}},'Copiar link')));
   return out;
+}
+
+/* challenges, profile, sheet */
+function lsGet(k){try{return localStorage.getItem(k)}catch(e){return null}}
+function lsSet(k,v){try{if(v==null)localStorage.removeItem(k);else localStorage.setItem(k,v)}catch(e){}}
+function legacy(){return {id:'',name:'Desafio Fit',type:'fit'}}
+function saveList(){lsSet('df_chs',JSON.stringify(LIST))}
+function entry(id){return LIST.filter(function(x){return x.id===id})[0]}
+function uidOf(id){return lsGet(id?'df_uid_'+id:'df_uid')}
+function prof(){try{return JSON.parse(lsGet('df_prof')||'{}')||{}}catch(e){return {}}}
+function setProf(o){lsSet('df_prof',JSON.stringify(Object.assign(prof(),o)))}
+function rid(){var a=new Uint8Array(12),i;try{crypto.getRandomValues(a)}catch(e){for(i=0;i<12;i++)a[i]=Math.floor(Math.random()*256)}return 'c'+Array.prototype.map.call(a,function(x){return (x%36).toString(36)}).join('')}
+function initList(){
+  var raw=lsGet('df_chs'),hm=location.hash.match(/[#&]d=([A-Za-z0-9]+)/),hasC=/[#&]c=/.test(location.hash),want=null,cur;
+  try{LIST=raw?JSON.parse(raw):null}catch(e){LIST=null}
+  if(!Array.isArray(LIST))LIST=(raw==null&&hm)?[]:[legacy()];
+  if(hm){want=hm[1];if(!entry(want))LIST.push({id:want,name:'Desafio',type:''})}
+  else if(hasC){if(!entry(''))LIST.unshift(legacy());want=''}
+  saveList();
+  cur=lsGet('df_cur');
+  CH=want!==null?want:(cur!==null&&entry(cur)?cur:(LIST[0]?LIST[0].id:null));
+  lsSet('df_cur',CH);
+}
+function syncEntry(){
+  var e=entry(CH),ch=false;if(!e||!S.cfg)return;
+  if(S.cfg.name&&e.name!==S.cfg.name){e.name=S.cfg.name;ch=true}
+  if(S.cfg.type&&e.type!==S.cfg.type){e.type=S.cfg.type;ch=true}
+  if(!S.cfg.type&&!e.type){e.type='fit';ch=true}
+  if(ch)saveList();
+}
+function teardown(){
+  unsubs.forEach(function(u){try{u()}catch(e){}});
+  unsubs=[];subs={};S.players={};S.metas={};S.cfg=null;S.loaded={players:false,cfg:false};S.err=null;S.uid=null;S.galDate=null;S.pColor=null;S.confirmNew=false;photoCache.clear();
+}
+function connect(){
+  var ch;
+  teardown();
+  if(CH===null){render(true);return}
+  ch=CH;S.uid=uidOf(CH);
+  var slow=setTimeout(function(){if(ch===CH&&!S.loaded.players)toast('Ainda não consegui carregar os dados.')},10000);
+  unsubs.push(S.db.collection(P('players')).onSnapshot(function(snap){
+    if(ch!==CH)return;
+    clearTimeout(slow);S.err=null;S.players={};snap.docs.forEach(function(d){S.players[d.id]=d.data()});
+    S.loaded.players=true;ensureSubs();render();
+  },function(e){if(ch!==CH)return;clearTimeout(slow);S.err=e||true;S.loaded.players=true;render(true)}));
+  unsubs.push(S.db.doc(P('config/main')).onSnapshot(function(s){
+    if(ch!==CH)return;
+    S.cfg=s.exists?s.data():null;S.loaded.cfg=true;syncEntry();render();
+  },function(){if(ch!==CH)return;S.loaded.cfg=true;render()}));
+  render(true);
+}
+function closeSheet(){S.sheet=false;S.confirmLeave=false;render(true)}
+function switchTo(id){
+  CH=id;lsSet('df_cur',id);S.tab='placar';S.sheet=false;S.confirmLeave=false;
+  connect();window.scrollTo(0,0);
+}
+function createCh(){
+  var name=(S.newName||'').trim().slice(0,30),type=S.newType||'refeicoes',id,doc;
+  if(!name){toast('Dê um nome ao desafio');return}
+  S.busy.create=true;render(true);
+  id=rid();
+  doc=Object.assign({},TYPEDEF[type].def,{name:name,type:type,start:today(),ts:Date.now()});
+  S.db.doc('desafios/'+id+'/config/main').set(doc).then(function(){
+    LIST.push({id:id,name:name,type:type});saveList();S.newName='';S.busy.create=false;
+    switchTo(id);toast('Desafio criado! Copie o link na aba Regras para convidar.');
+  }).catch(function(){S.busy.create=false;toast('Não foi possível criar. Confira a internet.')});
+}
+function joinByText(t){
+  t=String(t||'');
+  var m=t.match(/[#&]d=([A-Za-z0-9]+)/)||t.trim().match(/^(c[a-z0-9]{8,})$/),id;
+  if(!m&&/[#&]c=/.test(t)){if(!entry(''))LIST.unshift(legacy());saveList();S.joinText='';switchTo('');return}
+  if(!m){toast('Não entendi. Cole o link inteiro ou o código do desafio.');return}
+  id=m[1];
+  if(!entry(id)){LIST.push({id:id,name:'Desafio',type:''});saveList()}
+  S.joinText='';switchTo(id);
+}
+function leaveCh(id){
+  LIST=LIST.filter(function(x){return x.id!==id});saveList();lsSet(id?'df_uid_'+id:'df_uid',null);
+  S.sheet=false;S.confirmLeave=false;
+  if(CH===id){CH=LIST[0]?LIST[0].id:null;lsSet('df_cur',CH);connect()}else render(true);
+}
+function squareAvatar(file){
+  return new Promise(function(res,rej){
+    var url=URL.createObjectURL(file),im=new Image();
+    im.onload=function(){
+      var w=im.naturalWidth,hh=im.naturalHeight,s=Math.min(w,hh),cv=document.createElement('canvas');
+      cv.width=cv.height=160;cv.getContext('2d').drawImage(im,(w-s)/2,(hh-s)/2,s,s,0,0,160,160);
+      URL.revokeObjectURL(url);res(cv.toDataURL('image/jpeg',.75));
+    };
+    im.onerror=function(){URL.revokeObjectURL(url);rej(new Error('img'))};im.src=url;
+  });
+}
+function setAvatar(file){
+  S.busy.av=true;render(true);
+  squareAvatar(file).then(function(url){
+    setProf({av:url});
+    if(S.players[S.uid])S.players[S.uid].av=url;
+    return Promise.all(LIST.map(function(x){
+      var u=uidOf(x.id);if(!u)return null;
+      return S.db.doc((x.id?'desafios/'+x.id+'/':'')+'players/'+u).update({av:url}).catch(function(){});
+    }).filter(Boolean));
+  }).then(function(){toast('Foto de perfil atualizada')}).catch(function(){toast('Não consegui usar essa foto.')}).then(function(){S.busy.av=false;render(true)});
+}
+function chLabel(x){var T=x.type&&TYPEDEF[x.type];return T?T.label+(T.money?'':' · sem dinheiro'):''}
+function sheetView(){
+  var bg=h('div',{class:'sheet-bg',onclick:function(e){if(e.target===bg)closeSheet()}}),sh=h('div',{class:'sheet',role:'dialog','aria-label':'Perfil e desafios'});
+  var v=S.sheetView;
+  function back(){return h('button',{class:'btn ghost',type:'button',onclick:function(){S.sheetView='main';render(true)}},'Voltar')}
+  if(v==='new'){
+    var nm=h('input',{type:'text',id:'nc-name',maxlength:'30',placeholder:'Ex.: Marmita da firma',value:S.newName||'',oninput:function(e){S.newName=e.target.value}});
+    sh.appendChild(h('h2',null,'Novo desafio'));
+    sh.appendChild(h('label',{class:'fld',for:'nc-name'},'Nome do desafio',nm));
+    sh.appendChild(h('div',{class:'fld'},'Tipo',h('div',{class:'chips'},Object.keys(TYPEDEF).map(function(k){
+      return h('button',{class:'chip',type:'button','aria-pressed':String(S.newType===k),onclick:function(){S.newType=k;render(true)}},TYPEDEF[k].emo+' '+TYPEDEF[k].label);
+    }))));
+    sh.appendChild(h('p',{class:'muted small'},TYPEDEF[S.newType].about));
+    sh.appendChild(h('button',{class:'btn',type:'button',disabled:!!S.busy.create,onclick:createCh},S.busy.create?'Criando...':'Criar desafio'));
+    sh.appendChild(back());
+  }else if(v==='join'){
+    var ta=h('textarea',{id:'jn-text',placeholder:'Cole aqui o link ou o código do desafio',value:S.joinText||'',oninput:function(e){S.joinText=e.target.value}});
+    sh.appendChild(h('h2',null,'Entrar em um desafio'));
+    sh.appendChild(h('label',{class:'fld',for:'jn-text'},'Link ou código',ta));
+    sh.appendChild(h('button',{class:'btn',type:'button',onclick:function(){joinByText(S.joinText)}},'Entrar'));
+    sh.appendChild(back());
+  }else{
+    var me=S.players[S.uid]||{},pr=prof(),who={name:me.name||pr.name,av:me.av||pr.av,color:me.color||pr.color};
+    sh.appendChild(h('div',{class:'row'},avatar(who,64),
+      h('div',{class:'grow'},h('div',{class:'name'},me.name||pr.name||'Seu perfil'),h('span',{class:'muted small'},'A foto vale em todos os seus desafios')),
+      h('label',{class:'btn ghost',for:'av-file'},S.busy.av?'Enviando...':'Foto'),
+      h('input',{type:'file',accept:'image/*',id:'av-file',class:'file',onchange:function(e){var f=e.target.files&&e.target.files[0];e.target.value='';if(f)setAvatar(f)}})));
+    sh.appendChild(h('div',{class:'eyebrow'},'Seus desafios'));
+    LIST.forEach(function(x){
+      var cur=x.id===CH,T=TYPEDEF[x.type];
+      sh.appendChild(h('button',{class:'chrow',type:'button','aria-current':cur?'true':null,onclick:function(){if(cur)closeSheet();else switchTo(x.id)}},
+        h('span',{class:'chemo'},T?T.emo:'🏁'),
+        h('span',{class:'grow'},h('span',{class:'name'},x.name||'Desafio'),h('span',{class:'muted small',style:'display:block'},chLabel(x)||'Carregando...')),
+        cur?h('span',{class:'chip ok'},'Atual'):null));
+    });
+    if(!LIST.length)sh.appendChild(h('p',{class:'muted small'},'Você não está em nenhum desafio ainda.'));
+    sh.appendChild(h('button',{class:'btn',type:'button',onclick:function(){S.sheetView='new';render(true)}},'Criar novo desafio'));
+    sh.appendChild(h('button',{class:'btn ghost',type:'button',onclick:function(){S.sheetView='join';render(true)}},'Entrar com link ou código'));
+    if(CH!==null){
+      sh.appendChild(S.confirmLeave?
+        h('button',{class:'btn danger',type:'button',onclick:function(){leaveCh(CH)}},'Confirmar: sair deste desafio neste aparelho'):
+        h('button',{class:'btn ghost',type:'button',onclick:function(){S.confirmLeave=true;render(true)}},'Sair deste desafio'));
+      if(S.confirmLeave)sh.appendChild(h('p',{class:'muted small'},'Só tira da sua lista. Os pontos e fotos continuam salvos, e você volta com o link.'));
+    }
+    sh.appendChild(h('button',{class:'btn ghost',type:'button',onclick:closeSheet},'Fechar'));
+  }
+  bg.appendChild(sh);return bg;
+}
+function emptyView(){
+  return [h('section',{class:'card'},h('h2',null,'Nenhum desafio por aqui'),
+    h('p',{class:'muted'},'Crie um desafio novo ou entre em um com o link que você recebeu.'),
+    h('button',{class:'btn',type:'button',onclick:function(){S.sheet=true;S.sheetView='new';render(true)}},'Criar desafio'),
+    h('button',{class:'btn ghost',type:'button',onclick:function(){S.sheet=true;S.sheetView='join';render(true)}},'Entrar com link ou código'))];
+}
+function notFound(){
+  return h('section',{class:'card'},h('h2',null,'Não achei esse desafio'),
+    h('p',{class:'muted'},'Confira se o link ou o código está certo, ou peça um novo a quem criou.'),
+    h('button',{class:'btn',type:'button',onclick:function(){leaveCh(CH)}},'Tirar da minha lista'));
 }
 
 /* shell */
@@ -541,35 +734,50 @@ function render(force){
   if(!force&&ae&&root.contains(ae)&&/^(INPUT|TEXTAREA)$/.test(ae.tagName)&&ae.type!=='checkbox'&&ae.type!=='file'){pending=true;return}
   if(force&&ae&&root.contains(ae)&&/^(INPUT|TEXTAREA)$/.test(ae.tagName)&&ae.type!=='checkbox'&&ae.type!=='file'&&S.tab==='hoje'){ae.blur()}
   pending=false;
-  var me=S.players[S.uid];
-  var sub=S.db&&me?'Oi, '+(me.name||'')+'. Vamos treinar?':'Fotos diárias, pontos e placar';
-  var body=!S.db?setupView():(S.tab==='hoje'?viewHoje():S.tab==='galeria'?viewGaleria():S.tab==='regras'?viewRegras():viewPlacar());
-  root.replaceChildren(h('header',{class:'top'},h('h1',null,'Desafio Fit'),h('p',{class:'sub'},sub)),h('main',{class:'wrap',style:'padding:0'},body));
+  var me=S.players[S.uid],T=TY(),pr=prof();
+  var title=CH===null?'Desafio Fit':((S.cfg&&S.cfg.name)||(entry(CH)||{}).name||'Desafio Fit');
+  var sub=S.db&&me?'Oi, '+(me.name||'')+'. '+T.hello:(S.db&&CH===null?'Crie ou entre em um desafio':'Fotos diárias, pontos e placar');
+  var body;
+  if(!S.db)body=setupView();
+  else if(CH===null)body=emptyView();
+  else if(!S.loaded.cfg)body=[h('p',{class:'muted'},'Carregando...')];
+  else if(CH&&!S.cfg)body=[notFound()];
+  else body=S.tab==='hoje'?viewHoje():S.tab==='galeria'?viewGaleria():S.tab==='regras'?viewRegras():viewPlacar();
+  var who=me||{name:pr.name,av:pr.av,color:pr.color};
+  root.replaceChildren(
+    h('header',{class:'top'},h('div',{class:'tt'},h('h1',null,title),h('p',{class:'sub'},sub)),
+      S.db?h('button',{class:'profbtn',type:'button','aria-label':'Perfil e trocar desafio',onclick:function(){S.sheet=true;S.sheetView='main';render(true)}},avatar(who,48)):null),
+    h('main',{class:'wrap',style:'padding:0'},body));
   var old=document.getElementById('nav-host');if(old)old.remove();
-  if(S.db){
+  if(S.db&&CH!==null){
     var tabs=[['placar','Placar','trophy'],['hoje','Hoje','camera'],['galeria','Galeria','grid'],['regras','Regras','list']];
     document.body.appendChild(h('div',{id:'nav-host'},h('nav',{class:'nav','aria-label':'Seções'},h('div',{class:'nav-in'},tabs.map(function(t){
       return h('button',{class:'tab',type:'button','aria-current':S.tab===t[0]?'page':null,onclick:function(){setTab(t[0])}},icon(t[2]),t[1]);
     })))));
   }
+  var sh=document.getElementById('sheet-host');
+  if(!S.sheet||!S.db){if(sh)sh.remove()}
+  else if(force||!sh){if(sh)sh.remove();var nb=sheetView();nb.id='sheet-host';document.body.appendChild(nb)}
   var tt=document.getElementById('toast-host');if(tt)tt.remove();
   if(S.toast)document.body.appendChild(h('div',{id:'toast-host',class:'toast',role:'status'},S.toast));
 }
 
 /* data */
 function ensureSubs(){
+  var ch=CH;
   Object.keys(S.players).forEach(function(uid){
     if(subs[uid])return;
-    subs[uid]=S.db.collection('checkins/'+uid+'/days').onSnapshot(function(snap){
+    subs[uid]=true;
+    unsubs.push(S.db.collection(P('checkins/'+uid+'/days')).onSnapshot(function(snap){
+      if(ch!==CH)return;
       var m={};snap.docs.forEach(function(d){m[d.id]=d.data()});
       if(uid===S.uid){var cur=S.metas[uid]||{};Object.keys(cur).forEach(function(k){if(!m[k]&&cur[k]&&Date.now()-(cur[k].ts||0)<5000)m[k]=cur[k]})}
       S.metas[uid]=m;render();
-    },function(){});
+    },function(){}));
   });
 }
 function boot(){
   FBCFG=loadCfg();
-  try{S.uid=localStorage.getItem('df_uid')}catch(e){}
   if(FBCFG&&!window.firebase){S.setupErr='Não consegui carregar o Firebase. Confira a internet e abra o link de novo.';FBCFG=null}
   if(!FBCFG){render(true);return}
   try{
@@ -577,13 +785,9 @@ function boot(){
     S.db=firebase.firestore();
     try{S.db.settings({experimentalAutoDetectLongPolling:true,merge:true})}catch(e){}
   }catch(e){S.db=null;S.setupErr='A configuração do Firebase parece inválida. Cole de novo.';try{localStorage.removeItem('df_fb')}catch(e2){}render(true);return}
-  render(true);
-  var slow=setTimeout(function(){if(!S.loaded.players)toast('Ainda não consegui carregar os dados.')},10000);
-  S.db.collection('players').onSnapshot(function(snap){
-    clearTimeout(slow);S.err=null;S.players={};snap.docs.forEach(function(d){S.players[d.id]=d.data()});
-    S.loaded.players=true;ensureSubs();render();
-  },function(e){clearTimeout(slow);S.err=e||true;S.loaded.players=true;render(true)});
-  S.db.doc('config/main').onSnapshot(function(s){S.cfg=s.exists?s.data():null;S.loaded.cfg=true;render()},function(){S.loaded.cfg=true});
+  initList();
+  try{if(location.hash&&lsGet('df_fb'))history.replaceState(null,'',location.pathname+location.search)}catch(e){}
+  connect();
 }
 lastDay=today();
 setInterval(function(){
