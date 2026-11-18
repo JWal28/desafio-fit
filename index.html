@@ -87,6 +87,11 @@ label.fld{display:flex;flex-direction:column;gap:5px;font-size:13px;font-weight:
 .ph.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;color:var(--ink2);font-size:12px;border:1.5px dashed var(--line);background:transparent}
 .ph.empty svg{width:26px;height:26px}
 img.ph{cursor:zoom-in}
+.cell.part{background:var(--warn);opacity:1}
+.legend i.part{background:var(--warn)}
+.phw{position:relative;min-width:0}
+.tm{position:absolute;left:8px;bottom:8px;max-width:calc(100% - 16px);padding:3px 8px;border-radius:99px;background:rgba(0,0,0,.65);color:#fff;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums;pointer-events:none}
+.lbt{position:absolute;left:0;right:0;bottom:max(16px,env(safe-area-inset-bottom,0px));text-align:center;color:#fff;font-weight:600;text-shadow:0 1px 3px rgba(0,0,0,.8)}
 .banner{border-radius:12px;padding:12px 14px;font-weight:600}
 .banner.ok{background:var(--ok-bg);color:var(--ok)}
 .banner.warn{background:var(--warn-bg);color:var(--warn)}
@@ -167,16 +172,28 @@ function money(n){return 'R$ '+n.toLocaleString('pt-BR')}
 
 /* scoring */
 function valid(m,c){return !!(m&&m.w&&(!c.requireMeal||m.m))}
+/* penalidade do dia: 0 com as duas fotos, metade com só uma, cheia sem nenhuma */
+function dayPenalty(m,c){
+  var w=!!(m&&m.w),me=!!(m&&m.m);
+  if(!c.requireMeal)return w?0:c.penalty;
+  if(w&&me)return 0;
+  if(w||me)return c.penalty/2;
+  return c.penalty;
+}
+function num(n){return Number(n).toLocaleString('pt-BR',{maximumFractionDigits:1})}
 function stats(uid){
   var c=cfg(),p=S.players[uid]||{},metas=S.metas[uid]||{},t=today(),end=cycleEnd(c);
   var from=p.joined&&p.joined>c.start?p.joined:c.start;
-  var y=addDays(t,-1),lastPen=y<end?y:end,missed=[],done=0,d;
-  for(d=from;d<=lastPen;d=addDays(d,1)){if(valid(metas[d],c))done++;else missed.push(d)}
+  var y=addDays(t,-1),lastPen=y<end?y:end,missed=[],lost=0,done=0,d,pen;
+  for(d=from;d<=lastPen;d=addDays(d,1)){
+    pen=dayPenalty(metas[d],c);
+    if(pen===0)done++;else{missed.push({d:d,p:pen});lost+=pen}
+  }
   var todayOk=t>=from&&t<=end&&valid(metas[t],c);
   if(todayOk)done++;
   var s=0;d=todayOk?t:y;if(d>end)d=end;
   while(d>=from&&valid(metas[d],c)){s++;d=addDays(d,-1)}
-  return {points:Math.max(0,c.startPoints-c.penalty*missed.length),missed:missed,done:done,streak:s,todayOk:todayOk,from:from};
+  return {points:Math.max(0,c.startPoints-lost),missed:missed,done:done,streak:s,todayOk:todayOk,from:from};
 }
 function phase(c,t,end){return t<c.start?'before':(t>end?'after':'running')}
 function color(p){return COLORS.indexOf(p&&p.color)>=0?p.color:COLORS[0]}
@@ -230,18 +247,23 @@ function loadPhoto(uid,d,kind){
   var k=uid+'/'+d+'/'+kind,c=photoCache.get(k);
   if(c)return Promise.resolve(c);
   return S.db.doc('checkins/'+uid+'/photos/'+d+'_'+kind).get().then(function(s){
-    var v=s.exists?s.data().d:null;if(v)photoCache.set(k,v);return v;
+    var x=s.exists?s.data():null,v=x&&x.d?{d:x.d,ts:x.ts||0}:null;if(v)photoCache.set(k,v);return v;
   }).catch(function(){return null});
 }
+function timeLabel(ts){
+  if(!ts)return '';
+  var dt=new Date(ts),hm=pad(dt.getHours())+':'+pad(dt.getMinutes());
+  return key(dt)===today()?'hoje '+hm:pad(dt.getDate())+'/'+pad(dt.getMonth()+1)+' '+hm;
+}
 function photoImg(uid,d,kind,label){
-  var img=h('img',{class:'ph',alt:label||'Foto'});
-  loadPhoto(uid,d,kind).then(function(u){
-    if(u){img.src=u;img.addEventListener('click',function(){open(u)})}
-    else img.alt='Foto indisponível';
+  var img=h('img',{class:'ph',alt:label||'Foto'}),tm=h('span',{class:'tm'},''),box=h('div',{class:'phw'},img,tm);
+  loadPhoto(uid,d,kind).then(function(p){
+    if(p){img.src=p.d;tm.textContent=p.ts?'🕒 '+timeLabel(p.ts):'';tm.hidden=!p.ts;img.addEventListener('click',function(){open(p)})}
+    else{img.alt='Foto indisponível';tm.hidden=true}
   });
-  return img;
-  function open(u){
-    var lb=h('div',{class:'lb',onclick:function(){lb.remove()}},h('img',{src:u,alt:label||'Foto'}));
+  return box;
+  function open(p){
+    var lb=h('div',{class:'lb',onclick:function(){lb.remove()}},h('img',{src:p.d,alt:label||'Foto'}),p.ts?h('div',{class:'lbt'},(label?label+' · ':'')+'enviada '+timeLabel(p.ts)):null);
     document.body.appendChild(lb);
   }
 }
@@ -258,7 +280,7 @@ function uploadPhoto(kind,file){
   S.busy[kind]=true;render(true);
   compress(file).then(function(url){
     return S.db.doc('checkins/'+uid+'/photos/'+d+'_'+kind).set({d:url,ts:Date.now()}).then(function(){
-      photoCache.set(uid+'/'+d+'/'+kind,url);
+      photoCache.set(uid+'/'+d+'/'+kind,{d:url,ts:Date.now()});
       return saveMeta(kind==='w'?{w:true}:{m:true});
     });
   }).then(function(){toast('Foto salva')}).catch(function(){toast('Não consegui enviar a foto. Tente outra.')}).then(function(){S.busy[kind]=false;render(true)});
@@ -353,7 +375,7 @@ function viewPlacar(){
   });
   rows.forEach(function(r){r.rank=1+rows.filter(function(o){return o.s.points>r.s.points}).length});
   rows.forEach(function(r){
-    var s=r.s,missTxt=s.missed.length?'Faltas: '+s.missed.slice(-4).map(fmt).join(', ')+(s.missed.length>4?' (+'+(s.missed.length-4)+')':''):'Sem faltas';
+    var s=r.s,missTxt=s.missed.length?'Faltas: '+s.missed.slice(-4).map(function(x){return fmt(x.d)+' (−'+num(x.p)+')'}).join(', ')+(s.missed.length>4?' (+'+(s.missed.length-4)+')':''):'Sem faltas';
     out.push(h('section',{class:'card'},
       h('div',{class:'row'},
         h('div',{class:'rank'},r.rank+'º'),
@@ -376,14 +398,18 @@ function viewPlacar(){
       h('div',{class:'row small',style:'margin-bottom:6px'},avatar(r.p,20),h('b',null,r.p.name||'Sem nome')),
       h('div',{class:'cells'},days.map(function(d){
         var cls='cell';
-        if(d>=from&&d<=t){if(valid(metas[d],c))cls='cell ok';else if(d<t)cls='cell miss'}
+        if(d>=from&&d<=t){
+          var pn=dayPenalty(metas[d],c);
+          if(pn===0)cls='cell ok';else if(d<t)cls=pn<c.penalty?'cell part':'cell miss';
+        }
         if(d===t)cls+=' today';
         return h('i',{class:cls,title:fmt(d)+' ('+wd(d)+')'});
       }))));
   });
   grid.appendChild(h('div',{class:'legend'},
     h('span',null,h('i',{class:'ok'}),'Treino registrado'),
-    h('span',null,h('i',{class:'miss'}),'Falta (−'+c.penalty+')'),
+    c.requireMeal?h('span',null,h('i',{class:'part'}),'Só uma foto (−'+num(c.penalty/2)+')'):null,
+    h('span',null,h('i',{class:'miss'}),'Falta (−'+num(c.penalty)+')'),
     h('span',null,h('i',{class:'today'}),'Hoje'),
     h('span',null,h('i'),'A vir')));
   out.push(grid);
@@ -409,7 +435,7 @@ function viewHoje(){
   var missing=[];if(!meta.w)missing.push('foto do treino');if(c.requireMeal&&!meta.m)missing.push('foto da refeição');
   out.push(h('div',{class:'eyebrow'},wd(t)+', '+fmt(t)));
   if(!running)out.push(h('div',{class:'banner warn'},ph==='before'?'O ciclo começa em '+fmt(c.start)+'.':'O ciclo terminou. Comecem um novo na aba Regras.'));
-  else out.push(ok?h('div',{class:'banner ok'},'Dia validado. Sem penalidade hoje.'):h('div',{class:'banner warn'},'Falta enviar: '+missing.join(' e ')+'. Sem isso, perde '+c.penalty+' pontos.'));
+  else out.push(ok?h('div',{class:'banner ok'},'Dia validado. Sem penalidade hoje.'):h('div',{class:'banner warn'},'Falta enviar: '+missing.join(' e ')+'. Se não enviar até o fim do dia, perde '+num(dayPenalty(meta,c))+' pontos.'));
   out.push(h('section',{class:'card'},
     h('div',{class:'grid2'},
       slot('w','Treino','Academia, casa ou onde for',meta,running),
@@ -437,8 +463,8 @@ function viewGaleria(){
   var ids=Object.keys(S.players).sort(function(a,b){return a===S.uid?-1:b===S.uid?1:(S.players[a].name||'').localeCompare(S.players[b].name||'')});
   if(!ids.length)out.push(h('p',{class:'muted'},'Ninguém entrou ainda.'));
   ids.forEach(function(id){
-    var p=S.players[id],m=(S.metas[id]||{})[d],ok=valid(m,c),
-        chip=ok?h('span',{class:'chip ok'},'Validado'):(d<t?h('span',{class:'chip miss'},'Falta (−'+c.penalty+')'):h('span',{class:'chip warn'},'Pendente'));
+    var p=S.players[id],m=(S.metas[id]||{})[d],ok=valid(m,c),pn=dayPenalty(m,c),
+        chip=ok?h('span',{class:'chip ok'},'Validado'):(d<t?h('span',{class:'chip '+(pn<c.penalty?'warn':'miss')},(pn<c.penalty?'Só uma foto':'Falta')+' (−'+num(pn)+')'):h('span',{class:'chip warn'},'Pendente'));
     out.push(h('section',{class:'card'},
       h('div',{class:'row between'},h('div',{class:'row'},avatar(p,32),h('b',{class:'name'},p.name||'Sem nome')),chip),
       m&&(m.w||m.m)?h('div',{class:'photos'},
@@ -455,7 +481,7 @@ function viewRegras(){
     h('ul',{class:'rules'},
       h('li',null,'Todas começam com '+c.startPoints+' pontos.'),
       h('li',null,'Todo dia vale enviar a foto do treino'+(c.requireMeal?' e a foto de uma refeição saudável.':'. A foto da refeição é opcional.')),
-      h('li',null,'Dia sem registro completo custa '+c.penalty+' pontos, descontados quando o dia termina.'),
+      c.requireMeal?h('li',null,'Dia sem nenhuma foto custa '+num(c.penalty)+' pontos. Se enviar só uma das duas (treino ou refeição), custa a metade: '+num(c.penalty/2)+' pontos. Descontado quando o dia termina.'):h('li',null,'Dia sem foto do treino custa '+num(c.penalty)+' pontos, descontados quando o dia termina.'),
       h('li',null,'O registro só pode ser feito no próprio dia.'),
       h('li',null,'O ciclo dura '+c.months+' meses: de '+fmt(c.start)+' a '+fmt(end)+'.'),
       h('li',null,'No fim, quem tiver mais pontos ganha. Cada perdedora paga '+money(c.stake)+' à vencedora.'))));
