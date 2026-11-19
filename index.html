@@ -155,7 +155,7 @@ var ICON={
 };
 var FBCFG=null;
 var S={db:null,uid:null,players:{},metas:{},cfg:null,tab:'placar',galDate:null,loaded:{players:false,cfg:false},
-  err:null,busy:{},toast:'',confirmNew:false,newColor:COLORS[0],pColor:null,setupErr:'',sheet:false,sheetView:'main',confirmLeave:false,newName:'',newType:'refeicoes',joinText:''};
+  err:null,busy:{},toast:'',confirmNew:false,newColor:COLORS[0],pColor:null,setupErr:'',oldLink:false,sheet:false,sheetView:'main',confirmLeave:false,newName:'',newType:'refeicoes',joinText:''};
 var CH=null,LIST=[],unsubs=[];
 var photoCache=new Map(),subs={},pending=false,toastT=null,metaQueue=Promise.resolve(),lastDay='';
 
@@ -579,12 +579,13 @@ function rid(){var a=new Uint8Array(12),i;try{crypto.getRandomValues(a)}catch(e)
 function initList(){
   var raw=lsGet('df_chs'),hm=location.hash.match(/[#&]d=([A-Za-z0-9]+)/),hasC=/[#&]c=/.test(location.hash),want=null,cur;
   try{LIST=raw?JSON.parse(raw):null}catch(e){LIST=null}
-  if(!Array.isArray(LIST))LIST=(raw==null&&hm)?[]:[legacy()];
+  if(!Array.isArray(LIST))LIST=[];
+  LIST=LIST.filter(function(x){return x&&x.id});
   if(hm){want=hm[1];if(!entry(want))LIST.push({id:want,name:'Desafio',type:''})}
-  else if(hasC){if(!entry(''))LIST.unshift(legacy());want=''}
+  else if(hasC){S.oldLink=true}
   saveList();
   cur=lsGet('df_cur');
-  CH=want!==null?want:(cur!==null&&entry(cur)?cur:(LIST[0]?LIST[0].id:null));
+  CH=want!==null?want:(cur&&entry(cur)?cur:(LIST[0]?LIST[0].id:null));
   lsSet('df_cur',CH);
 }
 function syncEntry(){
@@ -607,7 +608,9 @@ function connect(){
   unsubs.push(S.db.collection(P('players')).onSnapshot(function(snap){
     if(ch!==CH)return;
     clearTimeout(slow);S.err=null;S.players={};snap.docs.forEach(function(d){S.players[d.id]=d.data()});
-    S.loaded.players=true;ensureSubs();render();
+    S.loaded.players=true;
+    if(!S.uid){var lu=lsGet('df_uid');if(lu&&S.players[lu]){S.uid=lu;lsSet('df_uid_'+CH,lu)}}
+    ensureSubs();render();
   },function(e){if(ch!==CH)return;clearTimeout(slow);S.err=e||true;S.loaded.players=true;render(true)}));
   unsubs.push(S.db.doc(P('config/main')).onSnapshot(function(s){
     if(ch!==CH)return;
@@ -634,7 +637,7 @@ function createCh(){
 function joinByText(t){
   t=String(t||'');
   var m=t.match(/[#&]d=([A-Za-z0-9]+)/)||t.trim().match(/^(c[a-z0-9]{8,})$/),id;
-  if(!m&&/[#&]c=/.test(t)){if(!entry(''))LIST.unshift(legacy());saveList();S.joinText='';switchTo('');return}
+  if(!m&&/[#&]c=/.test(t)){toast('Esse link é antigo e foi desativado. Peça o novo link do desafio.');return}
   if(!m){toast('Não entendi. Cole o link inteiro ou o código do desafio.');return}
   id=m[1];
   if(!entry(id)){LIST.push({id:id,name:'Desafio',type:''});saveList()}
@@ -743,6 +746,7 @@ function render(force){
   else if(!S.loaded.cfg)body=[h('p',{class:'muted'},'Carregando...')];
   else if(CH&&!S.cfg)body=[notFound()];
   else body=S.tab==='hoje'?viewHoje():S.tab==='galeria'?viewGaleria():S.tab==='regras'?viewRegras():viewPlacar();
+  if(S.oldLink)body=[h('section',{class:'card'},h('h3',null,'Link antigo'),h('p',{class:'muted small'},'Por segurança, o link antigo foi desativado. Peça o novo link do desafio a quem criou e abra por ele (ou cole em Entrar com link ou código).'),h('button',{class:'btn ghost',type:'button',onclick:function(){S.oldLink=false;render(true)}},'Entendi'))].concat(body);
   var who=me||{name:pr.name,av:pr.av,color:pr.color};
   root.replaceChildren(
     h('header',{class:'top'},h('div',{class:'tt'},h('h1',null,title),h('p',{class:'sub'},sub)),
