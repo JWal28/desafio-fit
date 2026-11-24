@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Desafio Fit</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#B3245F">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Desafio Fit">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Figtree:wght@400;600&display=swap">
 <style>
 /* Layout: one-column phone app. Cycle card, ranking cards, per-day grid, fixed bottom tab bar. */
@@ -368,7 +374,7 @@ function uploadPhoto(kind,file){
 function setupView(){
   var ta=h('textarea',{id:'cfg-in',placeholder:'const firebaseConfig = {\n  apiKey: "...",\n  authDomain: "...",\n  projectId: "...",\n  ...\n};'});
   var rulesBox=h('pre',{class:'code'},RULES_TXT);
-  return [h('section',{class:'card'},h('h2',null,'Conectar ao banco de dados'),
+  return [h('section',{class:'card'},h('h2',null,'Recebeu o link de um desafio?'),h('p',{class:'muted'},'Cole o link inteiro na caixa lá embaixo (em "Cole o firebaseConfig") e toque em Conectar. Se você só tocou no link, não precisa fazer nada.')),h('section',{class:'card'},h('h2',null,'Conectar ao banco de dados'),
     h('p',{class:'muted'},'Só a primeira pessoa faz isso, uma vez. Depois o app gera um link pronto para as amigas.'),
     h('ol',{class:'rules'},
       h('li',null,'Em console.firebase.google.com, crie um projeto (pode desligar o Analytics).'),
@@ -382,7 +388,10 @@ function setupView(){
       h('label',{class:'fld',for:'cfg-in'},'Configuração',ta),
       S.setupErr?h('div',{class:'banner miss'},S.setupErr):null,
       h('button',{class:'btn',type:'button',onclick:function(){
-        var o=parseCfg(ta.value);
+        var lk=ta.value.match(/[#&]c=([A-Za-z0-9_\-]+)/),dk=ta.value.match(/[#&]d=([A-Za-z0-9]+)/),o=null;
+        if(lk){try{o=decodeCfg(lk[1]);if(!(o&&o.apiKey&&o.projectId))o=null}catch(e){o=null}
+          if(o){try{localStorage.setItem('df_fb',JSON.stringify(o))}catch(e){}location.hash='c='+lk[1]+(dk?'&d='+dk[1]:'');location.reload();return}}
+        o=parseCfg(ta.value);
         if(!o){S.setupErr='Não achei apiKey e projectId no texto. Cole o bloco inteiro do firebaseConfig.';render(true);return}
         try{localStorage.setItem('df_fb',JSON.stringify(o))}catch(e){}
         location.hash='c='+encodeCfg(o);location.reload();
