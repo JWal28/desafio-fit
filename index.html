@@ -225,7 +225,7 @@ function dayPenalty(m,c){
   if(a||b)return c.penalty/2;
   return c.penalty;
 }
-function eligible(owner,d){return Object.keys(S.players).filter(function(id){return id!==owner&&(!S.players[id].joined||S.players[id].joined<=d)})}
+function eligible(owner,d){return Object.keys(S.players).filter(function(id){return id!==owner})}
 /* foto invalidada: todas as outras pessoas votaram para invalidar (minimo 2 votantes). Sem votos = valida. */
 function invalid(owner,d,kind){
   var el=eligible(owner,d);if(el.length<2)return false;
