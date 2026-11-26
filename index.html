@@ -372,30 +372,31 @@ function uploadPhoto(kind,file){
 
 /* views */
 function setupView(){
-  var ta=h('textarea',{id:'cfg-in',placeholder:'const firebaseConfig = {\n  apiKey: "...",\n  authDomain: "...",\n  projectId: "...",\n  ...\n};'});
+  var ta=h('textarea',{id:'cfg-in',rows:'4',placeholder:'Cole aqui o link completo do desafio'});
   var rulesBox=h('pre',{class:'code'},RULES_TXT);
-  return [h('section',{class:'card'},h('h2',null,'Recebeu o link de um desafio?'),h('p',{class:'muted'},'Cole o link inteiro na caixa lá embaixo (em "Cole o firebaseConfig") e toque em Conectar. Se você só tocou no link, não precisa fazer nada.')),h('section',{class:'card'},h('h2',null,'Conectar ao banco de dados'),
-    h('p',{class:'muted'},'Só a primeira pessoa faz isso, uma vez. Depois o app gera um link pronto para as amigas.'),
-    h('ol',{class:'rules'},
-      h('li',null,'Em console.firebase.google.com, crie um projeto (pode desligar o Analytics).'),
-      h('li',null,'No menu Build, abra Firestore Database e toque em Criar banco de dados. Escolha a região São Paulo (southamerica-east1).'),
-      h('li',null,'Na aba Regras do Firestore, cole o texto abaixo e toque em Publicar.'),
-      h('li',null,'Em Configurações do projeto, Seus apps, registre um app da Web e copie o firebaseConfig.'),
-      h('li',null,'Cole o firebaseConfig na caixa abaixo.'))),
-    h('section',{class:'card'},h('h3',null,'Regras do Firestore'),rulesBox,
-      h('button',{class:'btn ghost',type:'button',onclick:function(){copyText(RULES_TXT)}},'Copiar regras')),
-    h('section',{class:'card'},h('h3',null,'Cole o firebaseConfig'),
-      h('label',{class:'fld',for:'cfg-in'},'Configuração',ta),
+  function go(){
+    var v=ta.value,lk=v.match(/[#&]c=([A-Za-z0-9_\-]+)/),dk=v.match(/[#&]d=([A-Za-z0-9]+)/),o=null;
+    if(lk){try{o=decodeCfg(lk[1]);if(!(o&&o.apiKey&&o.projectId))o=null}catch(e){o=null}
+      if(o){try{localStorage.setItem('df_fb',JSON.stringify(o))}catch(e){}location.hash='c='+lk[1]+(dk?'&d='+dk[1]:'');location.reload();return}}
+    o=parseCfg(v);
+    if(!o){S.setupErr=/^\s*https?:/i.test(v)?'Esse link está incompleto (faltou a parte depois do #). Copie de novo em Regras > Link deste desafio, no app de quem já está dentro.':'Não consegui ler. Cole o link completo do desafio.';render(true);return}
+    try{localStorage.setItem('df_fb',JSON.stringify(o))}catch(e){}
+    location.hash='c='+encodeCfg(o);location.reload();
+  }
+  return [h('section',{class:'card'},h('h2',null,'Entrar no desafio'),
+      h('p',{class:'muted'},'Cole abaixo o link do desafio e toque em Conectar. Para pegar o link: na aba Regras, em "Link deste desafio", toque em Copiar link (pode ser no app de uma amiga ou no Safari).'),
+      h('label',{class:'fld',for:'cfg-in'},'Link do desafio',ta),
       S.setupErr?h('div',{class:'banner miss'},S.setupErr):null,
-      h('button',{class:'btn',type:'button',onclick:function(){
-        var lk=ta.value.match(/[#&]c=([A-Za-z0-9_\-]+)/),dk=ta.value.match(/[#&]d=([A-Za-z0-9]+)/),o=null;
-        if(lk){try{o=decodeCfg(lk[1]);if(!(o&&o.apiKey&&o.projectId))o=null}catch(e){o=null}
-          if(o){try{localStorage.setItem('df_fb',JSON.stringify(o))}catch(e){}location.hash='c='+lk[1]+(dk?'&d='+dk[1]:'');location.reload();return}}
-        o=parseCfg(ta.value);
-        if(!o){S.setupErr='Não achei apiKey e projectId no texto. Cole o bloco inteiro do firebaseConfig.';render(true);return}
-        try{localStorage.setItem('df_fb',JSON.stringify(o))}catch(e){}
-        location.hash='c='+encodeCfg(o);location.reload();
-      }},'Conectar'))];
+      h('button',{class:'btn',type:'button',onclick:go},'Conectar')),
+    h('details',{class:'card'},h('summary',null,'Sou a primeira pessoa (criar banco de dados novo)'),
+      h('ol',{class:'rules'},
+        h('li',null,'Em console.firebase.google.com, crie um projeto (pode desligar o Analytics).'),
+        h('li',null,'No menu Build, abra Firestore Database e toque em Criar banco de dados. Escolha a região São Paulo (southamerica-east1).'),
+        h('li',null,'Na aba Regras do Firestore, cole o texto abaixo e toque em Publicar.'),
+        h('li',null,'Em Configurações do projeto, Seus apps, registre um app da Web e copie o firebaseConfig.'),
+        h('li',null,'Cole o firebaseConfig na caixa acima e toque em Conectar.')),
+      rulesBox,
+      h('button',{class:'btn ghost',type:'button',onclick:function(){copyText(RULES_TXT)}},'Copiar regras'))];
 }
 function cycleCard(c,t,end){
   var ph=phase(c,t,end),total=diff(c.start,end)+1,n=ph==='running'?diff(c.start,t)+1:(ph==='after'?total:0);
